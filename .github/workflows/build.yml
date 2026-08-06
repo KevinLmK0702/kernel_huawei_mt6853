@@ -1,0 +1,147 @@
+name: Kernel Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false 
+      matrix:
+        branch: ['JSC-AN00A-Dev']
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ matrix.branch }}
+        fetch-depth: 0 
+
+    - name: Store ccache
+      uses: actions/cache@v4
+      with:
+        path: .ccache
+        key: ccache-${{ runner.os }}-${{ matrix.branch }}
+        restore-keys: |
+          ccache-${{ runner.os }}-${{ matrix.branch }}
+        save-always: true 
+
+    - name: Install Dependencies & Download Toolchains
+      run: |
+        sudo apt update
+        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 \
+        libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev make optipng maven libssl-dev pwgen libswitch-perl \
+        policycoreutils minicom libxml-sax-base-perl \
+        libxml-simple-perl bc libc6-dev-i386 libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip python2 zstd libc6 binutils libc6-dev-i386 g++ p7zip \
+        p7zip-full python2.7
+
+        sudo apt install gcc-9
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
+
+        # from https://github.com/xixiaobei-bei/KernelSU_on_Huawei/blob/KernelSU_on_Huawei/.github/workflows/Build_Kernel.yml
+        mkdir -p prebuilts/gcc/linux-x86/aarch64
+        mkdir -p prebuilts/gcc/linux-x86/arm
+        mkdir -p prebuilts/clang/host/linux-x86
+        
+        # aarch64-linux-android-4.9 setup
+        cd $GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64
+        git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+        cd aarch64-linux-android-4.9
+        git checkout 84fb09fafc92a3d9b4d160f049d46c3c784cc941
+
+        # arm-linux-androideabi-4.9 setup
+        cd $GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/arm
+        git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+        cd arm-linux-androideabi-4.9
+        git checkout 5a8beef7b1aa2c8ca0dfe4a00358559d12dfa3b6
+
+        # Google clang package setup
+        cd $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86
+        git clone -b clang-r346389c https://github.com/KevinLmK0702/toolchains_google_prebuilts.git clang-r346389c
+        cd $GITHUB_WORKSPACE/ # Return to workspace
+
+    - name: Setup build environment
+      run: |
+        TC_DIR="$GITHUB_WORKSPACE/prebuilts"
+        CLANG_DIR="$TC_DIR/clang/host/linux-x86/clang-r346389c"
+        CLANG_BIN_DIR="$CLANG_DIR/bin"
+        GCC_64_BIN_DIR="$TC_DIR/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+        GCC_32_BIN_DIR="$TC_DIR/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
+        
+        echo "PATH=$CLANG_BIN_DIR:$GCC_64_BIN_DIR:$GCC_32_BIN_DIR:$PATH" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=$CLANG_DIR/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+        
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-androidkernel-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "TARGET_BUILD_VARIANT=user" >> $GITHUB_ENV
+        
+        echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+        echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+        echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,file_macro" >> $GITHUB_ENV
+        echo "CCACHE_DEPEND=1" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+        
+        sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+            
+    - name: Display ccache statistics (before build)
+      run: |
+        echo "=== CCache Statistics Before Build for branch ${{ matrix.branch }} ==="
+        ccache -s
+        echo "======================================"
+        
+    - name: Set swap to 10G
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 10    
+        
+
+    - name: Configure and Build kernel
+      run: |
+        START_TIME=$(date +%s)
+        echo "Configuring and building kernel for branch ${{ matrix.branch }} withccache..."
+        
+        make -j$(nproc --all) O=out CC=clang LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy merge_full_k6853v1_64_defconfig
+        
+        make -j$(nproc --all) O=out CC=clang LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy \
+            $@ \
+            Image.gz dtbs 2>&1 | tee -a build_kernel_${{ matrix.branch }}.log
+            
+        END_TIME=$(date +%s)
+        BUILD_DURATION=$((END_TIME - START_TIME))
+        echo "Build for branch ${{ matrix.branch }} completed in $((BUILD_DURATION / 60)) minutes and $((BUILD_DURATION % 60)) seconds"
+            
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          echo "Image.gz found for branch ${{ matrix.branch }}!"
+          echo "Generated kernel image:"
+          ls -lh "out/arch/arm64/boot/Image.gz"
+          echo "File type:"
+          file "out/arch/arm64/boot/Image.gz"
+        else
+          echo "Kernel build failed for branch ${{ matrix.branch }}!"
+          exit 1
+        fi      
+        
+    - name: Display ccache statistics (after build)
+      run: |
+        echo "=== CCache Statistics After Build for branch ${{ matrix.branch }} ==="
+        ccache -s
+        echo "====================================="
+        
+    - name: Prepare artifacts
+      run: |
+        mkdir -p artifacts_${{ matrix.branch }}
+        cp "out/arch/arm64/boot/Image.gz" "artifacts_${{ matrix.branch }}/"
+        cp build_kernel_${{ matrix.branch }}.log "artifacts_${{ matrix.branch }}/" 2>/dev/null || true
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-clang-${{ matrix.branch }}-${{ github.run_id }}
+        path: |
+          artifacts_${{ matrix.branch }}/Image.gz
+          artifacts_${{ matrix.branch }}/build_kernel_${{ matrix.branch }}.log
+        retention-days: 7
+        if-no-files-found: warn
