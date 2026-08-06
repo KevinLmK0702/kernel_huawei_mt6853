@@ -31,13 +31,14 @@
 #include <linux/inetdevice.h>
 #include <linux/string.h>
 
-#include "wmt_exp.h"
-#include "stp_exp.h"
 #include "connsys_debug_utility.h"
 
 #if (CFG_ANDORID_CONNINFRA_SUPPORT == 1)
 #include "fw_log_wifi.h"
 #include "conninfra.h"
+#else
+#include "wmt_exp.h"
+#include "stp_exp.h"
 #endif
 
 MODULE_LICENSE("Dual BSD/GPL");
