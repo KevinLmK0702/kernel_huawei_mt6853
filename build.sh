@@ -38,6 +38,7 @@ export CROSS_COMPILE=$GCC_64_BIN_DIR/aarch64-linux-androidkernel-
 export CROSS_COMPILE_ARM32=$GCC_32_BIN_DIR/arm-linux-androideabi-
 export CLANG_TRIPLE=aarch64-linux-gnu-
 
+export TARGET_BUILD_VARIANT=user
 
 sudo ln -sf /usr/bin/python2.7 /usr/bin/python  
 
